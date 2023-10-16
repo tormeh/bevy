@@ -154,7 +154,7 @@ impl<'a, A: IsAligned> Ptr<'a, A> {
     /// - The lifetime `'a` must be constrained such that this [`Ptr`] will stay valid and nothing
     ///   can mutate the pointee while this [`Ptr`] is live except through an [`UnsafeCell`].
     #[inline]
-    pub unsafe fn new(inner: NonNull<u8>) -> Self {
+    pub const unsafe fn new(inner: NonNull<u8>) -> Self {
         Self(inner, PhantomData)
     }
 
@@ -184,7 +184,7 @@ impl<'a, A: IsAligned> Ptr<'a, A> {
     /// as it retains the lifetime.
     #[inline]
     #[allow(clippy::wrong_self_convention)]
-    pub fn as_ptr(self) -> *mut u8 {
+    pub const fn as_ptr(self) -> *mut u8 {
         self.0.as_ptr()
     }
 }
@@ -238,7 +238,7 @@ impl<'a, A: IsAligned> PtrMut<'a, A> {
     /// this function, as it retains the lifetime.
     #[inline]
     #[allow(clippy::wrong_self_convention)]
-    pub fn as_ptr(&self) -> *mut u8 {
+    pub const fn as_ptr(&self) -> *mut u8 {
         self.0.as_ptr()
     }
 
@@ -251,7 +251,7 @@ impl<'a, A: IsAligned> PtrMut<'a, A> {
 
     /// Gets an immutable reference from this mutable reference
     #[inline]
-    pub fn as_ref(&self) -> Ptr<'_, A> {
+    pub const fn as_ref(&self) -> Ptr<'_, A> {
         // SAFE: The `PtrMut` type's guarantees about the validity of this pointer are a superset of `Ptr` s guarantees
         unsafe { Ptr::new(self.0) }
     }
@@ -321,13 +321,13 @@ impl<'a, A: IsAligned> OwningPtr<'a, A> {
     /// over this function.
     #[inline]
     #[allow(clippy::wrong_self_convention)]
-    pub fn as_ptr(&self) -> *mut u8 {
+    pub const fn as_ptr(&self) -> *mut u8 {
         self.0.as_ptr()
     }
 
     /// Gets an immutable pointer from this owned pointer.
     #[inline]
-    pub fn as_ref(&self) -> Ptr<'_, A> {
+    pub const fn as_ref(&self) -> Ptr<'_, A> {
         // SAFE: The `Owning` type's guarantees about the validity of this pointer are a superset of `Ptr` s guarantees
         unsafe { Ptr::new(self.0) }
     }
@@ -344,7 +344,7 @@ impl<'a> OwningPtr<'a, Unaligned> {
     ///
     /// # Safety
     /// - `T` must be the erased pointee type for this [`OwningPtr`].
-    pub unsafe fn read_unaligned<T>(self) -> T {
+    pub const unsafe fn read_unaligned<T>(self) -> T {
         self.as_ptr().cast::<T>().read_unaligned()
     }
 }
