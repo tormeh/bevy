@@ -3,6 +3,7 @@
 use std::f32::consts::PI;
 
 use bevy::prelude::*;
+use bevy_internal::render::camera::{ExposureSettings, PhysicalCameraParameters};
 
 fn main() {
     App::new()
@@ -17,10 +18,17 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(0., 1.5, 6.).looking_at(Vec3::ZERO, Vec3::Y),
-        ..default()
-    });
+    commands.spawn((
+        Camera3dBundle {
+            transform: Transform::from_xyz(0., 1.5, 6.).looking_at(Vec3::ZERO, Vec3::Y),
+            ..default()
+        },
+        ExposureSettings::from_physical_camera(PhysicalCameraParameters {
+            aperture_f_stops: 1.0,
+            shutter_speed_s: 0.1,
+            sensitivity_iso: 1000.0,
+        }),
+    ));
     // plane
     commands.spawn(PbrBundle {
         mesh: meshes.add(Mesh::from(shape::Plane::from_size(5.0))),
