@@ -29,6 +29,7 @@ mod cluster;
 mod components;
 pub mod contact_shadows;
 use bevy_gltf::extensions::{GltfExtensionHandler, GltfExtensionHandlers};
+use bevy_render::sync_component::SyncComponent;
 pub use contact_shadows::{
     ContactShadows, ContactShadowsBuffer, ContactShadowsPlugin, ContactShadowsUniform,
     ViewContactShadowsUniformOffset,
@@ -204,7 +205,7 @@ impl Plugin for PbrPlugin {
                 ScreenSpaceAmbientOcclusionPlugin,
                 FogPlugin,
                 ExtractResourcePlugin::<DefaultOpaqueRendererMethod>::default(),
-                SyncComponentPlugin::<ShadowFilteringMethod>::default(),
+                SyncComponentPlugin::<ShadowFilteringMethod, Self>::default(),
                 LightmapPlugin,
                 LightProbePlugin,
                 GpuMeshPreprocessPlugin {
@@ -218,10 +219,10 @@ impl Plugin for PbrPlugin {
             ))
             .add_plugins((
                 decal::ForwardDecalPlugin,
-                SyncComponentPlugin::<DirectionalLight>::default(),
-                SyncComponentPlugin::<PointLight>::default(),
-                SyncComponentPlugin::<SpotLight>::default(),
-                SyncComponentPlugin::<AmbientLight>::default(),
+                SyncComponentPlugin::<DirectionalLight, Self>::default(),
+                SyncComponentPlugin::<PointLight, Self>::default(),
+                SyncComponentPlugin::<SpotLight, Self>::default(),
+                SyncComponentPlugin::<AmbientLight, Self>::default(),
             ))
             .add_plugins((ScatteringMediumPlugin, AtmospherePlugin));
 
@@ -462,4 +463,20 @@ impl GltfExtensionHandler for GltfExtensionHandlerPbr {
 
         entity.insert(MeshMaterial3d(handle));
     }
+}
+
+impl SyncComponent<PbrPlugin> for DirectionalLight {
+    type Out = Self;
+}
+impl SyncComponent<PbrPlugin> for PointLight {
+    type Out = Self;
+}
+impl SyncComponent<PbrPlugin> for SpotLight {
+    type Out = Self;
+}
+impl SyncComponent<PbrPlugin> for AmbientLight {
+    type Out = Self;
+}
+impl SyncComponent<PbrPlugin> for ShadowFilteringMethod {
+    type Out = Self;
 }
