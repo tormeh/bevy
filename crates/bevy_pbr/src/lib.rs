@@ -81,6 +81,7 @@ pub use pbr_material::*;
 pub use prepass::*;
 pub use render::*;
 pub use ssao::*;
+pub use ssgi::*;
 pub use ssr::*;
 pub use transmission::*;
 pub use volumetric_fog::VolumetricFogPlugin;
@@ -222,6 +223,7 @@ impl Plugin for PbrPlugin {
                 ContactShadowsPlugin,
             ))
             .add_plugins((
+                ScreenSpaceGlobalIlluminationPlugin,
                 decal::ForwardDecalPlugin,
                 SyncComponentPlugin::<DirectionalLight, Self>::default(),
                 SyncComponentPlugin::<PointLight, Self>::default(),

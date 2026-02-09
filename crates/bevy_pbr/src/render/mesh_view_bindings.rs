@@ -50,9 +50,10 @@ use crate::{
     Bluenoise, EnvironmentMapUniformBuffer, ExtractedAtmosphere, FogMeta,
     GlobalClusterableObjectMeta, GpuClusteredLights, GpuFog, GpuLights, LightMeta,
     LightProbesBuffer, LightProbesUniform, MeshPipeline, MeshPipelineKey, RenderViewLightProbes,
-    ScreenSpaceAmbientOcclusionResources, ScreenSpaceReflectionsBuffer,
-    ScreenSpaceReflectionsUniform, ShadowSamplers, ViewClusterBindings, ViewShadowBindings,
-    ViewTransmissionTexture, CLUSTERED_FORWARD_STORAGE_BUFFER_COUNT,
+    ScreenSpaceAmbientOcclusionResources, ScreenSpaceGlobalIlluminationResources,
+    ScreenSpaceReflectionsBuffer, ScreenSpaceReflectionsUniform, ShadowSamplers,
+    ViewClusterBindings, ViewShadowBindings, ViewTransmissionTexture,
+    CLUSTERED_FORWARD_STORAGE_BUFFER_COUNT,
 };
 
 #[cfg(all(feature = "webgl", target_arch = "wasm32", not(feature = "webgpu")))]
@@ -611,6 +612,7 @@ pub fn prepare_mesh_view_bind_groups(
         &ViewClusterBindings,
         &Msaa,
         Option<&ScreenSpaceAmbientOcclusionResources>,
+        Option<&ScreenSpaceGlobalIlluminationResources>,
         Option<&ViewPrepassTextures>,
         Option<&ViewTransmissionTexture>,
         &Tonemapping,
@@ -675,6 +677,7 @@ pub fn prepare_mesh_view_bind_groups(
             cluster_bindings,
             msaa,
             ssao_resources,
+            ssgi_resources,
             prepass_textures,
             transmission_texture,
             tonemapping,
@@ -690,8 +693,11 @@ pub fn prepare_mesh_view_bind_groups(
                 .image_for_samplecount(1, TextureFormat::bevy_default())
                 .texture_view
                 .clone();
-            let ssao_view = ssao_resources
+            let ssao_view = ssgi_resources
                 .map(|t| &t.screen_space_ambient_occlusion_texture.default_view)
+                .or_else(|| {
+                    ssao_resources.map(|t| &t.screen_space_ambient_occlusion_texture.default_view)
+                })
                 .unwrap_or(&fallback_ssao);
 
             let mut layout_key = MeshPipelineViewLayoutKey::from(*msaa)

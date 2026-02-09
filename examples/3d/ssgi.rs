@@ -1,4 +1,4 @@
-//! Demonstrates screen space ambient occlusion (SSAO) in deferred rendering.
+//! Demonstrates screen space global illumination (SSGI) in deferred rendering.
 
 use std::fmt;
 
@@ -16,7 +16,7 @@ use bevy::{
     math::{vec3, vec4},
     pbr::{
         DefaultOpaqueRendererMethod, ExtendedMaterial, MaterialExtension,
-        ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel,
+        ScreenSpaceGlobalIllumination, ScreenSpaceGlobalIlluminationQualityLevel,
     },
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderType},
@@ -73,12 +73,12 @@ struct WaterSettings {
 /// The current settings that the user has chosen.
 #[derive(Resource)]
 struct AppSettings {
-    /// Whether screen space ambient occlusion is on.
-    ssao_on: bool,
-    /// The SSAO quality level.
-    ssao_quality: ScreenSpaceAmbientOcclusionQualityLevel,
-    /// The constant object thickness for SSAO.
-    ssao_constant_object_thickness: f32,
+    /// Whether screen space global illumination is on.
+    ssgi_on: bool,
+    /// The SSGI quality level.
+    ssgi_quality: ScreenSpaceGlobalIlluminationQualityLevel,
+    /// The constant object thickness for SSGI.
+    ssgi_constant_object_thickness: f32,
     /// Which model is being displayed.
     displayed_model: DisplayedModel,
     /// Which base is being displayed.
@@ -133,8 +133,8 @@ impl fmt::Display for DisplayedBase {
 
 #[derive(Clone, Copy, PartialEq)]
 enum ExampleSetting {
-    Ssao(bool),
-    SsaoQuality(ScreenSpaceAmbientOcclusionQualityLevel),
+    Ssgi(bool),
+    SsgiQuality(ScreenSpaceGlobalIlluminationQualityLevel),
     ThicknessIncrease,
     ThicknessDecrease,
     Model(DisplayedModel),
@@ -185,14 +185,14 @@ struct ModelQueries<'w, 's> {
 
 fn main() {
     // Enable deferred rendering, which is necessary for screen-space
-    // ambient occlusion at this time. Disable multisampled antialiasing, as
+    // global illumination at this time. Disable multisampled antialiasing, as
     // deferred rendering doesn't support that.
     App::new()
         .insert_resource(DefaultOpaqueRendererMethod::deferred())
         .init_resource::<AppSettings>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Bevy Screen Space Ambient Occlusion Example".into(),
+                title: "Bevy Screen Space Global Illumination Example".into(),
                 ..default()
             }),
             ..default()
@@ -393,7 +393,7 @@ fn spawn_camera(commands: &mut Commands, asset_server: &AssetServer, app_setting
     // Create the camera. Add an environment map and skybox so the scene has
     // interesting lighting. Enable deferred rendering by adding depth and
     // deferred prepasses. Turn on TAA to make the scene look a little nicer.
-    // Finally, add screen space ambient occlusion.
+    // Finally, add screen space global illumination.
     commands.spawn((
         Camera3d::default(),
         Transform::from_translation(vec3(-1.25, 2.25, 4.5)).looking_at(Vec3::ZERO, Vec3::Y),
@@ -401,9 +401,9 @@ fn spawn_camera(commands: &mut Commands, asset_server: &AssetServer, app_setting
         Msaa::Off,
         TemporalAntiAliasing::default(),
         DeferredPrepass,
-        ScreenSpaceAmbientOcclusion {
-            quality_level: app_settings.ssao_quality,
-            constant_object_thickness: app_settings.ssao_constant_object_thickness,
+        ScreenSpaceGlobalIllumination {
+            quality_level: app_settings.ssgi_quality,
+            constant_object_thickness: app_settings.ssgi_constant_object_thickness,
         },
         EnvironmentMapLight {
             diffuse_map: asset_server.load("environment_maps/pisa_diffuse_rgb9e5_zstd.ktx2"),
@@ -422,10 +422,10 @@ fn spawn_camera(commands: &mut Commands, asset_server: &AssetServer, app_setting
 fn spawn_buttons(commands: &mut Commands, app_settings: &AppSettings) {
     commands.spawn(main_ui_node()).with_children(|parent| {
         parent.spawn(option_buttons(
-            "SSAO",
+            "SSGI",
             &[
-                (ExampleSetting::Ssao(true), "On"),
-                (ExampleSetting::Ssao(false), "Off"),
+                (ExampleSetting::Ssgi(true), "On"),
+                (ExampleSetting::Ssgi(false), "Off"),
             ],
         ));
 
@@ -433,25 +433,25 @@ fn spawn_buttons(commands: &mut Commands, app_settings: &AppSettings) {
             "Quality",
             &[
                 (
-                    ExampleSetting::SsaoQuality(ScreenSpaceAmbientOcclusionQualityLevel::Low),
+                    ExampleSetting::SsgiQuality(ScreenSpaceGlobalIlluminationQualityLevel::Low),
                     "Low",
                 ),
                 (
-                    ExampleSetting::SsaoQuality(ScreenSpaceAmbientOcclusionQualityLevel::Medium),
+                    ExampleSetting::SsgiQuality(ScreenSpaceGlobalIlluminationQualityLevel::Medium),
                     "Medium",
                 ),
                 (
-                    ExampleSetting::SsaoQuality(ScreenSpaceAmbientOcclusionQualityLevel::High),
+                    ExampleSetting::SsgiQuality(ScreenSpaceGlobalIlluminationQualityLevel::High),
                     "High",
                 ),
                 (
-                    ExampleSetting::SsaoQuality(ScreenSpaceAmbientOcclusionQualityLevel::Ultra),
+                    ExampleSetting::SsgiQuality(ScreenSpaceGlobalIlluminationQualityLevel::Ultra),
                     "Ultra",
                 ),
             ],
         ));
 
-        parent.spawn(thickness_row(app_settings.ssao_constant_object_thickness));
+        parent.spawn(thickness_row(app_settings.ssgi_constant_object_thickness));
 
         parent.spawn(option_buttons(
             "Model",
@@ -647,15 +647,15 @@ fn adjust_app_settings(
     for event in widget_click_events.read() {
         any_changes = true;
         match **event {
-            ExampleSetting::Ssao(on) => app_settings.ssao_on = on,
-            ExampleSetting::SsaoQuality(quality) => app_settings.ssao_quality = quality,
+            ExampleSetting::Ssgi(on) => app_settings.ssgi_on = on,
+            ExampleSetting::SsgiQuality(quality) => app_settings.ssgi_quality = quality,
             ExampleSetting::ThicknessIncrease => {
-                app_settings.ssao_constant_object_thickness =
-                    (app_settings.ssao_constant_object_thickness * 2.0).min(4.0);
+                app_settings.ssgi_constant_object_thickness =
+                    (app_settings.ssgi_constant_object_thickness * 2.0).min(4.0);
             }
             ExampleSetting::ThicknessDecrease => {
-                app_settings.ssao_constant_object_thickness =
-                    (app_settings.ssao_constant_object_thickness * 0.5).max(0.0625);
+                app_settings.ssgi_constant_object_thickness =
+                    (app_settings.ssgi_constant_object_thickness * 0.5).max(0.0625);
             }
             ExampleSetting::Model(model) => app_settings.displayed_model = model,
             ExampleSetting::Base(base) => app_settings.displayed_base = base,
@@ -666,17 +666,19 @@ fn adjust_app_settings(
         return;
     }
 
-    // Update SSAO settings.
+    // Update SSGI settings.
     for camera in cameras.iter_mut() {
-        if app_settings.ssao_on {
-            commands.entity(camera).insert(ScreenSpaceAmbientOcclusion {
-                quality_level: app_settings.ssao_quality,
-                constant_object_thickness: app_settings.ssao_constant_object_thickness,
-            });
+        if app_settings.ssgi_on {
+            commands
+                .entity(camera)
+                .insert(ScreenSpaceGlobalIllumination {
+                    quality_level: app_settings.ssgi_quality,
+                    constant_object_thickness: app_settings.ssgi_constant_object_thickness,
+                });
         } else {
             commands
                 .entity(camera)
-                .remove::<ScreenSpaceAmbientOcclusion>();
+                .remove::<ScreenSpaceGlobalIllumination>();
         }
     }
 
@@ -739,8 +741,8 @@ fn adjust_app_settings(
     // Update radio buttons.
     for (entity, has_background, has_text, sender) in radio_buttons.iter() {
         let selected = match **sender {
-            ExampleSetting::Ssao(on) => app_settings.ssao_on == on,
-            ExampleSetting::SsaoQuality(quality) => app_settings.ssao_quality == quality,
+            ExampleSetting::Ssgi(on) => app_settings.ssgi_on == on,
+            ExampleSetting::SsgiQuality(quality) => app_settings.ssgi_quality == quality,
             ExampleSetting::Model(model) => app_settings.displayed_model == model,
             ExampleSetting::Base(base) => app_settings.displayed_base == base,
             _ => {
@@ -770,7 +772,7 @@ fn adjust_app_settings(
             for child in children.iter() {
                 if text_query.get(child).is_ok() {
                     *writer.text(child, 0) =
-                        format!("{:.4}", app_settings.ssao_constant_object_thickness);
+                        format!("{:.4}", app_settings.ssgi_constant_object_thickness);
                     writer.for_each_color(child, |mut color| {
                         color.0 = Color::BLACK;
                     });
@@ -789,9 +791,9 @@ impl MaterialExtension for Water {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            ssao_on: true,
-            ssao_quality: ScreenSpaceAmbientOcclusionQualityLevel::Medium,
-            ssao_constant_object_thickness: 0.25,
+            ssgi_on: true,
+            ssgi_quality: ScreenSpaceGlobalIlluminationQualityLevel::Medium,
+            ssgi_constant_object_thickness: 0.25,
             displayed_model: default(),
             displayed_base: default(),
         }

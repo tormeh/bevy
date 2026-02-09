@@ -1,4 +1,4 @@
-#define_import_path bevy_pbr::ssao_utils
+#define_import_path bevy_pbr::ssgi_utils
 
 #import bevy_render::maths::{PI, HALF_PI}
 
