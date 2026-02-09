@@ -1,12 +1,12 @@
-//! Demonstrates screen space reflections in deferred rendering.
+//! Demonstrates screen space ambient occlusion (SSAO) in deferred rendering.
 
 use std::fmt;
-use std::ops::Range;
 
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing,
     camera::Hdr,
     color::palettes::css::{BLACK, WHITE},
+    core_pipeline::prepass::DeferredPrepass,
     image::{
         ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler,
         ImageSamplerDescriptor,
@@ -16,7 +16,7 @@ use bevy::{
     math::{vec3, vec4},
     pbr::{
         DefaultOpaqueRendererMethod, ExtendedMaterial, MaterialExtension,
-        ScreenSpaceAmbientOcclusion, ScreenSpaceReflections,
+        ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel,
     },
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderType},
@@ -41,7 +41,7 @@ const CAMERA_KEYBOARD_ORBIT_SPEED: f32 = 0.02;
 const CAMERA_MOUSE_WHEEL_ZOOM_SPEED: f32 = 0.25;
 
 // We clamp camera distances to this range.
-const CAMERA_ZOOM_RANGE: Range<f32> = 2.0..12.0;
+const CAMERA_ZOOM_RANGE: core::ops::Range<f32> = 2.0..12.0;
 
 /// A custom [`ExtendedMaterial`] that creates animated water ripples.
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -73,18 +73,16 @@ struct WaterSettings {
 /// The current settings that the user has chosen.
 #[derive(Resource)]
 struct AppSettings {
-    /// Whether screen space reflections are on.
-    ssr_on: bool,
+    /// Whether screen space ambient occlusion is on.
+    ssao_on: bool,
+    /// The SSAO quality level.
+    ssao_quality: ScreenSpaceAmbientOcclusionQualityLevel,
+    /// The constant object thickness for SSAO.
+    ssao_constant_object_thickness: f32,
     /// Which model is being displayed.
     displayed_model: DisplayedModel,
     /// Which base is being displayed.
     displayed_base: DisplayedBase,
-    /// The perceptual roughness range over which SSR begins to fade in.
-    min_perceptual_roughness: Range<f32>,
-    /// The perceptual roughness range over which SSR begins to fade out.
-    max_perceptual_roughness: Range<f32>,
-    /// The range over which SSR begins to fade out at the edges of the screen.
-    edge_fadeout: Range<f32>,
 }
 
 /// Which model is being displayed.
@@ -135,21 +133,12 @@ impl fmt::Display for DisplayedBase {
 
 #[derive(Clone, Copy, PartialEq)]
 enum ExampleSetting {
-    Ssr(bool),
+    Ssao(bool),
+    SsaoQuality(ScreenSpaceAmbientOcclusionQualityLevel),
+    ThicknessIncrease,
+    ThicknessDecrease,
     Model(DisplayedModel),
     Base(DisplayedBase),
-    MinRoughnessStart(Adjustment),
-    MinRoughnessEnd(Adjustment),
-    MaxRoughnessStart(Adjustment),
-    MaxRoughnessEnd(Adjustment),
-    EdgeFadeoutStart(Adjustment),
-    EdgeFadeoutEnd(Adjustment),
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Adjustment {
-    Increase,
-    Decrease,
 }
 
 /// A marker component for the single cube model.
@@ -180,16 +169,9 @@ struct RedPlaneBaseModel;
 #[derive(Component)]
 struct WaterModel;
 
-/// A marker component for the text that displays a range value.
+/// A marker component for the text that displays the thickness value.
 #[derive(Component)]
-enum RangeValueText {
-    MinRoughnessStart,
-    MinRoughnessEnd,
-    MaxRoughnessStart,
-    MaxRoughnessEnd,
-    EdgeFadeoutStart,
-    EdgeFadeoutEnd,
-}
+struct ThicknessValueText;
 
 #[derive(bevy::ecs::system::SystemParam)]
 struct ModelQueries<'w, 's> {
@@ -203,14 +185,14 @@ struct ModelQueries<'w, 's> {
 
 fn main() {
     // Enable deferred rendering, which is necessary for screen-space
-    // reflections at this time. Disable multisampled antialiasing, as deferred
-    // rendering doesn't support that.
+    // ambient occlusion at this time. Disable multisampled antialiasing, as
+    // deferred rendering doesn't support that.
     App::new()
         .insert_resource(DefaultOpaqueRendererMethod::deferred())
         .init_resource::<AppSettings>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Bevy Screen Space Reflections Example".into(),
+                title: "Bevy Screen Space Ambient Occlusion Example".into(),
                 ..default()
             }),
             ..default()
@@ -408,23 +390,21 @@ fn spawn_water(
 
 // Spawns the camera.
 fn spawn_camera(commands: &mut Commands, asset_server: &AssetServer, app_settings: &AppSettings) {
-    // Create the camera. Add an environment map and skybox so the water has
-    // something interesting to reflect, other than the cube. Enable deferred
-    // rendering by adding depth and deferred prepasses. Turn on FXAA to make
-    // the scene look a little nicer. Finally, add screen space reflections.
+    // Create the camera. Add an environment map and skybox so the scene has
+    // interesting lighting. Enable deferred rendering by adding depth and
+    // deferred prepasses. Turn on TAA to make the scene look a little nicer.
+    // Finally, add screen space ambient occlusion.
     commands.spawn((
         Camera3d::default(),
         Transform::from_translation(vec3(-1.25, 2.25, 4.5)).looking_at(Vec3::ZERO, Vec3::Y),
         Hdr,
         Msaa::Off,
         TemporalAntiAliasing::default(),
-        ScreenSpaceReflections {
-            min_perceptual_roughness: app_settings.min_perceptual_roughness.clone(),
-            max_perceptual_roughness: app_settings.max_perceptual_roughness.clone(),
-            edge_fadeout: app_settings.edge_fadeout.clone(),
-            ..default()
+        DeferredPrepass,
+        ScreenSpaceAmbientOcclusion {
+            quality_level: app_settings.ssao_quality,
+            constant_object_thickness: app_settings.ssao_constant_object_thickness,
         },
-        ScreenSpaceAmbientOcclusion::default(),
         EnvironmentMapLight {
             diffuse_map: asset_server.load("environment_maps/pisa_diffuse_rgb9e5_zstd.ktx2"),
             specular_map: asset_server.load("environment_maps/pisa_specular_rgb9e5_zstd.ktx2"),
@@ -442,12 +422,36 @@ fn spawn_camera(commands: &mut Commands, asset_server: &AssetServer, app_setting
 fn spawn_buttons(commands: &mut Commands, app_settings: &AppSettings) {
     commands.spawn(main_ui_node()).with_children(|parent| {
         parent.spawn(option_buttons(
-            "SSR",
+            "SSAO",
             &[
-                (ExampleSetting::Ssr(true), "On"),
-                (ExampleSetting::Ssr(false), "Off"),
+                (ExampleSetting::Ssao(true), "On"),
+                (ExampleSetting::Ssao(false), "Off"),
             ],
         ));
+
+        parent.spawn(option_buttons(
+            "Quality",
+            &[
+                (
+                    ExampleSetting::SsaoQuality(ScreenSpaceAmbientOcclusionQualityLevel::Low),
+                    "Low",
+                ),
+                (
+                    ExampleSetting::SsaoQuality(ScreenSpaceAmbientOcclusionQualityLevel::Medium),
+                    "Medium",
+                ),
+                (
+                    ExampleSetting::SsaoQuality(ScreenSpaceAmbientOcclusionQualityLevel::High),
+                    "High",
+                ),
+                (
+                    ExampleSetting::SsaoQuality(ScreenSpaceAmbientOcclusionQualityLevel::Ultra),
+                    "Ultra",
+                ),
+            ],
+        ));
+
+        parent.spawn(thickness_row(app_settings.ssao_constant_object_thickness));
 
         parent.spawn(option_buttons(
             "Model",
@@ -469,56 +473,10 @@ fn spawn_buttons(commands: &mut Commands, app_settings: &AppSettings) {
                 (ExampleSetting::Base(DisplayedBase::RedPlane), "Red Plane"),
             ],
         ));
-
-        parent.spawn(range_row(
-            "Min Roughness",
-            app_settings.min_perceptual_roughness.start,
-            app_settings.min_perceptual_roughness.end,
-            RangeValueText::MinRoughnessStart,
-            RangeValueText::MinRoughnessEnd,
-            ExampleSetting::MinRoughnessStart(Adjustment::Decrease),
-            ExampleSetting::MinRoughnessStart(Adjustment::Increase),
-            ExampleSetting::MinRoughnessEnd(Adjustment::Decrease),
-            ExampleSetting::MinRoughnessEnd(Adjustment::Increase),
-        ));
-
-        parent.spawn(range_row(
-            "Max Roughness",
-            app_settings.max_perceptual_roughness.start,
-            app_settings.max_perceptual_roughness.end,
-            RangeValueText::MaxRoughnessStart,
-            RangeValueText::MaxRoughnessEnd,
-            ExampleSetting::MaxRoughnessStart(Adjustment::Decrease),
-            ExampleSetting::MaxRoughnessStart(Adjustment::Increase),
-            ExampleSetting::MaxRoughnessEnd(Adjustment::Decrease),
-            ExampleSetting::MaxRoughnessEnd(Adjustment::Increase),
-        ));
-
-        parent.spawn(range_row(
-            "Edge Fadeout",
-            app_settings.edge_fadeout.start,
-            app_settings.edge_fadeout.end,
-            RangeValueText::EdgeFadeoutStart,
-            RangeValueText::EdgeFadeoutEnd,
-            ExampleSetting::EdgeFadeoutStart(Adjustment::Decrease),
-            ExampleSetting::EdgeFadeoutStart(Adjustment::Increase),
-            ExampleSetting::EdgeFadeoutEnd(Adjustment::Decrease),
-            ExampleSetting::EdgeFadeoutEnd(Adjustment::Increase),
-        ));
     });
 }
 
-fn range_row(
-    title: &str,
-    start_value: f32,
-    end_value: f32,
-    start_marker: RangeValueText,
-    end_marker: RangeValueText,
-    start_dec: ExampleSetting,
-    start_inc: ExampleSetting,
-    end_dec: ExampleSetting,
-    end_inc: ExampleSetting,
-) -> impl Bundle {
+fn thickness_row(value: f32) -> impl Bundle {
     (
         Node {
             align_items: AlignItems::Center,
@@ -526,46 +484,32 @@ fn range_row(
         },
         Children::spawn((
             Spawn((
-                widgets::ui_text(title, Color::WHITE),
+                widgets::ui_text("Thickness", Color::WHITE),
                 Node {
                     width: px(150),
                     ..default()
                 },
             )),
-            Spawn(range_controls(
-                start_value,
-                start_marker,
-                start_dec,
-                start_inc,
-            )),
-            Spawn((
-                widgets::ui_text("to", Color::WHITE),
-                Node {
-                    margin: UiRect::horizontal(px(10)),
-                    ..default()
-                },
-            )),
-            Spawn(range_controls(end_value, end_marker, end_dec, end_inc)),
+            Spawn(thickness_controls(value)),
         )),
     )
 }
 
-fn range_controls(
-    value: f32,
-    marker: RangeValueText,
-    dec_setting: ExampleSetting,
-    inc_setting: ExampleSetting,
-) -> impl Bundle {
+fn thickness_controls(value: f32) -> impl Bundle {
     (
         Node {
             align_items: AlignItems::Center,
             ..default()
         },
         Children::spawn((
-            Spawn(adjustment_button(dec_setting, "<", Some(true))),
+            Spawn(adjustment_button(
+                ExampleSetting::ThicknessDecrease,
+                "<",
+                Some(true),
+            )),
             Spawn((
                 Node {
-                    width: px(50),
+                    width: px(60),
                     height: px(33),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
@@ -574,10 +518,14 @@ fn range_controls(
                 },
                 BackgroundColor(Color::WHITE),
                 BUTTON_BORDER_COLOR,
-                marker,
-                children![(widgets::ui_text(&format!("{:.2}", value), Color::BLACK))],
+                ThicknessValueText,
+                children![(widgets::ui_text(&format!("{:.4}", value), Color::BLACK))],
             )),
-            Spawn(adjustment_button(inc_setting, ">", Some(false))),
+            Spawn(adjustment_button(
+                ExampleSetting::ThicknessIncrease,
+                ">",
+                Some(false),
+            )),
         )),
     )
 }
@@ -689,7 +637,7 @@ fn adjust_app_settings(
         ),
         Or<(With<RadioButton>, With<RadioButtonText>)>,
     >,
-    range_value_text: Query<(Entity, &RangeValueText)>,
+    thickness_value_text: Query<Entity, With<ThicknessValueText>>,
     text_children: Query<&Children>,
     mut writer: TextUiWriter,
     text_query: Query<Entity, With<Text>>,
@@ -699,32 +647,18 @@ fn adjust_app_settings(
     for event in widget_click_events.read() {
         any_changes = true;
         match **event {
-            ExampleSetting::Ssr(on) => app_settings.ssr_on = on,
+            ExampleSetting::Ssao(on) => app_settings.ssao_on = on,
+            ExampleSetting::SsaoQuality(quality) => app_settings.ssao_quality = quality,
+            ExampleSetting::ThicknessIncrease => {
+                app_settings.ssao_constant_object_thickness =
+                    (app_settings.ssao_constant_object_thickness * 2.0).min(4.0);
+            }
+            ExampleSetting::ThicknessDecrease => {
+                app_settings.ssao_constant_object_thickness =
+                    (app_settings.ssao_constant_object_thickness * 0.5).max(0.0625);
+            }
             ExampleSetting::Model(model) => app_settings.displayed_model = model,
             ExampleSetting::Base(base) => app_settings.displayed_base = base,
-            ExampleSetting::MinRoughnessStart(adj) => {
-                app_settings.min_perceptual_roughness.start =
-                    adjust(app_settings.min_perceptual_roughness.start, adj, 0.005);
-            }
-            ExampleSetting::MinRoughnessEnd(adj) => {
-                app_settings.min_perceptual_roughness.end =
-                    adjust(app_settings.min_perceptual_roughness.end, adj, 0.005);
-            }
-            ExampleSetting::MaxRoughnessStart(adj) => {
-                app_settings.max_perceptual_roughness.start =
-                    adjust(app_settings.max_perceptual_roughness.start, adj, 0.005);
-            }
-            ExampleSetting::MaxRoughnessEnd(adj) => {
-                app_settings.max_perceptual_roughness.end =
-                    adjust(app_settings.max_perceptual_roughness.end, adj, 0.005);
-            }
-            ExampleSetting::EdgeFadeoutStart(adj) => {
-                app_settings.edge_fadeout.start =
-                    adjust(app_settings.edge_fadeout.start, adj, 0.001);
-            }
-            ExampleSetting::EdgeFadeoutEnd(adj) => {
-                app_settings.edge_fadeout.end = adjust(app_settings.edge_fadeout.end, adj, 0.001);
-            }
         }
     }
 
@@ -732,17 +666,17 @@ fn adjust_app_settings(
         return;
     }
 
-    // Update SSR settings.
+    // Update SSAO settings.
     for camera in cameras.iter_mut() {
-        if app_settings.ssr_on {
-            commands.entity(camera).insert(ScreenSpaceReflections {
-                min_perceptual_roughness: app_settings.min_perceptual_roughness.clone(),
-                max_perceptual_roughness: app_settings.max_perceptual_roughness.clone(),
-                edge_fadeout: app_settings.edge_fadeout.clone(),
-                ..default()
+        if app_settings.ssao_on {
+            commands.entity(camera).insert(ScreenSpaceAmbientOcclusion {
+                quality_level: app_settings.ssao_quality,
+                constant_object_thickness: app_settings.ssao_constant_object_thickness,
             });
         } else {
-            commands.entity(camera).remove::<ScreenSpaceReflections>();
+            commands
+                .entity(camera)
+                .remove::<ScreenSpaceAmbientOcclusion>();
         }
     }
 
@@ -805,7 +739,8 @@ fn adjust_app_settings(
     // Update radio buttons.
     for (entity, has_background, has_text, sender) in radio_buttons.iter() {
         let selected = match **sender {
-            ExampleSetting::Ssr(on) => app_settings.ssr_on == on,
+            ExampleSetting::Ssao(on) => app_settings.ssao_on == on,
+            ExampleSetting::SsaoQuality(quality) => app_settings.ssao_quality == quality,
             ExampleSetting::Model(model) => app_settings.displayed_model == model,
             ExampleSetting::Base(base) => app_settings.displayed_base == base,
             _ => {
@@ -829,20 +764,13 @@ fn adjust_app_settings(
         }
     }
 
-    // Update range value text.
-    for (parent, marker) in range_value_text.iter() {
-        let val = match marker {
-            RangeValueText::MinRoughnessStart => app_settings.min_perceptual_roughness.start,
-            RangeValueText::MinRoughnessEnd => app_settings.min_perceptual_roughness.end,
-            RangeValueText::MaxRoughnessStart => app_settings.max_perceptual_roughness.start,
-            RangeValueText::MaxRoughnessEnd => app_settings.max_perceptual_roughness.end,
-            RangeValueText::EdgeFadeoutStart => app_settings.edge_fadeout.start,
-            RangeValueText::EdgeFadeoutEnd => app_settings.edge_fadeout.end,
-        };
+    // Update thickness value text.
+    for parent in thickness_value_text.iter() {
         if let Ok(children) = text_children.get(parent) {
             for child in children.iter() {
                 if text_query.get(child).is_ok() {
-                    *writer.text(child, 0) = format!("{:.2}", val);
+                    *writer.text(child, 0) =
+                        format!("{:.4}", app_settings.ssao_constant_object_thickness);
                     writer.for_each_color(child, |mut color| {
                         color.0 = Color::BLACK;
                     });
@@ -858,22 +786,14 @@ impl MaterialExtension for Water {
     }
 }
 
-fn adjust(val: f32, adj: Adjustment, amount: f32) -> f32 {
-    match adj {
-        Adjustment::Increase => (val + amount).min(1.0),
-        Adjustment::Decrease => (val - amount).max(0.0),
-    }
-}
-
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            ssr_on: true,
+            ssao_on: true,
+            ssao_quality: ScreenSpaceAmbientOcclusionQualityLevel::Medium,
+            ssao_constant_object_thickness: 0.25,
             displayed_model: default(),
             displayed_base: default(),
-            min_perceptual_roughness: 0.0..0.01,
-            max_perceptual_roughness: 0.99..1.0,
-            edge_fadeout: 0.0..0.0,
         }
     }
 }
