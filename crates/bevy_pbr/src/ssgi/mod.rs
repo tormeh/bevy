@@ -427,7 +427,7 @@ impl FromWorld for SsaoPipelines {
             point_clamp_sampler,
             linear_clamp_sampler,
 
-            shader: load_embedded_asset!(world, "ssao.wgsl"),
+            shader: load_embedded_asset!(world, "ssgi.wgsl"),
             depth_format,
         }
     }
