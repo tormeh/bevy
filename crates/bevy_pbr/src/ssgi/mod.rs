@@ -40,9 +40,9 @@ use core::mem;
 use tracing::{error, warn};
 
 /// Plugin for screen space ambient occlusion.
-pub struct ScreenSpaceAmbientOcclusionPlugin;
+pub struct ScreenSpaceGlobalIlluminationPlugin;
 
-impl Plugin for ScreenSpaceAmbientOcclusionPlugin {
+impl Plugin for ScreenSpaceGlobalIlluminationPlugin {
     fn build(&self, app: &mut App) {
         load_shader_library!(app, "ssgi_utils.wgsl");
 
@@ -50,7 +50,7 @@ impl Plugin for ScreenSpaceAmbientOcclusionPlugin {
         embedded_asset!(app, "ssgi.wgsl");
         embedded_asset!(app, "spatial_denoise.wgsl");
 
-        app.add_plugins(SyncComponentPlugin::<ScreenSpaceAmbientOcclusion>::default());
+        app.add_plugins(SyncComponentPlugin::<ScreenSpaceGlobalIllumination>::default());
     }
 
     fn finish(&self, app: &mut App) {
@@ -65,7 +65,7 @@ impl Plugin for ScreenSpaceAmbientOcclusionPlugin {
             .max_storage_textures_per_shader_stage
             < 5
         {
-            warn!("ScreenSpaceAmbientOcclusionPlugin not loaded. GPU lacks support: Limits::max_storage_textures_per_shader_stage is less than 5.");
+            warn!("ScreenSpaceGlobalIlluminationPlugin not loaded. GPU lacks support: Limits::max_storage_textures_per_shader_stage is less than 5.");
             return;
         }
 
@@ -101,7 +101,7 @@ impl Plugin for ScreenSpaceAmbientOcclusionPlugin {
 ///
 /// # Usage Notes
 ///
-/// Requires that you add [`ScreenSpaceAmbientOcclusionPlugin`] to your app.
+/// Requires that you add [`ScreenSpaceGlobalIlluminationPlugin`] to your app.
 ///
 /// It strongly recommended that you use SSAO in conjunction with
 /// TAA (`TemporalAntiAliasing`).
@@ -112,9 +112,9 @@ impl Plugin for ScreenSpaceAmbientOcclusionPlugin {
 #[reflect(Component, Debug, Default, PartialEq, Clone)]
 #[require(DepthPrepass, NormalPrepass)]
 #[doc(alias = "Ssao")]
-pub struct ScreenSpaceAmbientOcclusion {
+pub struct ScreenSpaceGlobalIllumination {
     /// Quality of the SSAO effect.
-    pub quality_level: ScreenSpaceAmbientOcclusionQualityLevel,
+    pub quality_level: ScreenSpaceGlobalIlluminationQualityLevel,
     /// A constant estimated thickness of objects.
     ///
     /// This value is used to decide how far behind an object a ray of light needs to be in order
@@ -122,10 +122,10 @@ pub struct ScreenSpaceAmbientOcclusion {
     pub constant_object_thickness: f32,
 }
 
-impl Default for ScreenSpaceAmbientOcclusion {
+impl Default for ScreenSpaceGlobalIllumination {
     fn default() -> Self {
         Self {
-            quality_level: ScreenSpaceAmbientOcclusionQualityLevel::default(),
+            quality_level: ScreenSpaceGlobalIlluminationQualityLevel::default(),
             constant_object_thickness: 0.25,
         }
     }
@@ -133,7 +133,7 @@ impl Default for ScreenSpaceAmbientOcclusion {
 
 #[derive(Reflect, PartialEq, Eq, Hash, Clone, Copy, Default, Debug)]
 #[reflect(PartialEq, Hash, Clone, Default)]
-pub enum ScreenSpaceAmbientOcclusionQualityLevel {
+pub enum ScreenSpaceGlobalIlluminationQualityLevel {
     Low,
     Medium,
     #[default]
@@ -147,7 +147,7 @@ pub enum ScreenSpaceAmbientOcclusionQualityLevel {
     },
 }
 
-impl ScreenSpaceAmbientOcclusionQualityLevel {
+impl ScreenSpaceGlobalIlluminationQualityLevel {
     fn sample_counts(&self) -> (u32, u32) {
         match self {
             Self::Low => (1, 2),    // 4 spp (1 * (2 * 2)), plus optional temporal samples
@@ -435,7 +435,7 @@ impl FromWorld for SsaoPipelines {
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 struct SsaoPipelineKey {
-    quality_level: ScreenSpaceAmbientOcclusionQualityLevel,
+    quality_level: ScreenSpaceGlobalIlluminationQualityLevel,
     temporal_jitter: bool,
 }
 
@@ -478,7 +478,7 @@ fn extract_ssao_settings(
     mut commands: Commands,
     cameras: Extract<
         Query<
-            (RenderEntity, &Camera, &ScreenSpaceAmbientOcclusion, &Msaa),
+            (RenderEntity, &Camera, &ScreenSpaceGlobalIllumination, &Msaa),
             (With<Camera3d>, With<DepthPrepass>, With<NormalPrepass>),
         >,
     >,
@@ -497,13 +497,13 @@ fn extract_ssao_settings(
         if camera.is_active {
             entity_commands.insert(ssao_settings.clone());
         } else {
-            entity_commands.remove::<ScreenSpaceAmbientOcclusion>();
+            entity_commands.remove::<ScreenSpaceGlobalIllumination>();
         }
     }
 }
 
 #[derive(Component)]
-pub struct ScreenSpaceAmbientOcclusionResources {
+pub struct ScreenSpaceGlobalIlluminationResources {
     preprocessed_depth_texture: CachedTexture,
     ssao_noisy_texture: CachedTexture, // Pre-spatially denoised texture
     pub screen_space_ambient_occlusion_texture: CachedTexture, // Spatially denoised texture
@@ -516,7 +516,7 @@ fn prepare_ssao_textures(
     mut texture_cache: ResMut<TextureCache>,
     render_device: Res<RenderDevice>,
     pipelines: Res<SsaoPipelines>,
-    views: Query<(Entity, &ExtractedCamera, &ScreenSpaceAmbientOcclusion)>,
+    views: Query<(Entity, &ExtractedCamera, &ScreenSpaceGlobalIllumination)>,
 ) {
     for (entity, camera, ssao_settings) in &views {
         let Some(physical_viewport_size) = camera.physical_viewport_size else {
@@ -588,7 +588,7 @@ fn prepare_ssao_textures(
 
         commands
             .entity(entity)
-            .insert(ScreenSpaceAmbientOcclusionResources {
+            .insert(ScreenSpaceGlobalIlluminationResources {
                 preprocessed_depth_texture,
                 ssao_noisy_texture,
                 screen_space_ambient_occlusion_texture: ssao_texture,
@@ -606,7 +606,7 @@ fn prepare_ssao_pipelines(
     pipeline_cache: Res<PipelineCache>,
     mut pipelines: ResMut<SpecializedComputePipelines<SsaoPipelines>>,
     pipeline: Res<SsaoPipelines>,
-    views: Query<(Entity, &ScreenSpaceAmbientOcclusion, Has<TemporalJitter>)>,
+    views: Query<(Entity, &ScreenSpaceGlobalIllumination, Has<TemporalJitter>)>,
 ) {
     for (entity, ssao_settings, temporal_jitter) in &views {
         let pipeline_id = pipelines.specialize(
@@ -639,7 +639,7 @@ fn prepare_ssao_bind_groups(
     pipeline_cache: Res<PipelineCache>,
     views: Query<(
         Entity,
-        &ScreenSpaceAmbientOcclusionResources,
+        &ScreenSpaceGlobalIlluminationResources,
         &ViewPrepassTextures,
     )>,
 ) {
