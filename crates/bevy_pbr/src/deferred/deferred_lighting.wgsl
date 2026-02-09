@@ -63,12 +63,14 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     if ((pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u) {
 
 #ifdef SCREEN_SPACE_AMBIENT_OCCLUSION
-        let ssao = textureLoad(screen_space_ambient_occlusion_texture, vec2<i32>(in.position.xy), 0i).r;
+        let ssao_data = textureLoad(screen_space_ambient_occlusion_texture, vec2<i32>(in.position.xy), 0i);
+        let ssao = ssao_data.r;
+        let ssgi_indirect = ssao_data.gba;
         let ssao_multibounce = ssao_multibounce(ssao, pbr_input.material.base_color.rgb);
         pbr_input.diffuse_occlusion = min(pbr_input.diffuse_occlusion, ssao_multibounce);
 
         // Neubelt and Pettineo 2013, "Crafting a Next-gen Material Pipeline for The Order: 1886"
-        let NdotV = max(dot(pbr_input.N, pbr_input.V), 0.0001); 
+        let NdotV = max(dot(pbr_input.N, pbr_input.V), 0.0001);
         var perceptual_roughness: f32 = pbr_input.material.perceptual_roughness;
         let roughness = lighting::perceptualRoughnessToRoughness(perceptual_roughness);
         // Use SSAO to estimate the specular occlusion.
@@ -77,6 +79,13 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 #endif // SCREEN_SPACE_AMBIENT_OCCLUSION
 
         output_color = pbr_functions::apply_pbr_lighting(pbr_input);
+
+#ifdef SCREEN_SPACE_AMBIENT_OCCLUSION
+        // Add SSGI indirect diffuse light (stored in the GBA channels of the AO texture).
+        // Modulate by the material's diffuse color (base_color for non-metals).
+        let diffuse_color = pbr_input.material.base_color.rgb * (1.0 - pbr_input.material.metallic);
+        output_color += vec4(ssgi_indirect * diffuse_color, 0.0);
+#endif // SCREEN_SPACE_AMBIENT_OCCLUSION
     } else {
         output_color = pbr_input.material.base_color;
     }
@@ -85,4 +94,3 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     return output_color;
 }
-

@@ -1,14 +1,14 @@
-// Visibility Bitmask Ambient Occlusion (VBAO)
-// Paper: ttps://ar5iv.labs.arxiv.org/html/2301.11376
-
-// Source code heavily based on XeGTAO v1.30 from Intel
+// Screen Space Global Illumination (SSGI)
+//
+// Based on Visibility Bitmask Ambient Occlusion (VBAO) extended with indirect light sampling.
+// Paper: https://ar5iv.labs.arxiv.org/html/2301.11376
+//
+// The AO computation is based on XeGTAO v1.30 from Intel
 // https://github.com/GameTechDev/XeGTAO/blob/0d177ce06bfa642f64d8af4de1197ad1bcb862d4/Source/Rendering/Shaders/XeGTAO.hlsli
-
-// Source code based on the existing XeGTAO implementation and
-// https://cdrinmatane.github.io/posts/ssaovb-code/
-
-// Source code base on SSRT3 implementation
-// https://github.com/cdrinmatane/SSRT3
+//
+// The indirect light computation samples the deferred GBuffer's base color at
+// positions found during horizon-based ray marching, accumulating bounced light
+// weighted by geometric factors (cosine, distance falloff).
 
 #import bevy_render::maths::fast_acos
 
@@ -21,17 +21,27 @@
 @group(0) @binding(0) var preprocessed_depth: texture_2d<f32>;
 @group(0) @binding(1) var normals: texture_2d<f32>;
 @group(0) @binding(2) var hilbert_index_lut: texture_2d<u32>;
-#ifdef USE_R16FLOAT
-@group(0) @binding(3) var ambient_occlusion: texture_storage_2d<r16float, write>;
-#else
-@group(0) @binding(3) var ambient_occlusion: texture_storage_2d<r32float, write>;
-#endif
+@group(0) @binding(3) var ssgi_output: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(4) var depth_differences: texture_storage_2d<r32uint, write>;
 @group(0) @binding(5) var<uniform> globals: Globals;
 @group(0) @binding(6) var<uniform> thickness: f32;
+@group(0) @binding(7) var deferred_prepass: texture_2d<u32>;
 @group(1) @binding(0) var point_clamp_sampler: sampler;
 @group(1) @binding(1) var linear_clamp_sampler: sampler;
 @group(1) @binding(2) var<uniform> view: View;
+
+// Unpack base color from the deferred GBuffer's first channel (R).
+// The GBuffer packs base_color.rgb + perceptual_roughness into a single u32 via 4x8 unorm.
+fn unpack_base_color(gbuffer_r: u32) -> vec3<f32> {
+    let unpacked = vec4<f32>(
+        f32(gbuffer_r & 0xFFu),
+        f32((gbuffer_r >> 8u) & 0xFFu),
+        f32((gbuffer_r >> 16u) & 0xFFu),
+        f32((gbuffer_r >> 24u) & 0xFFu),
+    ) / 255.0;
+    // Convert from sRGB to linear (approximate gamma 2.2)
+    return pow(unpacked.rgb, vec3(2.2));
+}
 
 fn load_noise(pixel_coordinates: vec2<i32>) -> vec2<f32> {
     var index = textureLoad(hilbert_index_lut, pixel_coordinates % 64, 0).r;
@@ -129,9 +139,20 @@ fn processSample(
     *bitmask = updateSectors(front_back_horizon.x, front_back_horizon.y, samples_per_slice, *bitmask);
 }
 
+// Sample the base color from the deferred GBuffer at the given pixel coordinates.
+// Returns vec3(0.0) if the coordinates are out of bounds.
+fn sample_gbuffer_base_color(pixel_coords: vec2<i32>) -> vec3<f32> {
+    let dims = vec2<i32>(view.viewport.zw);
+    if any(pixel_coords < vec2<i32>(0)) || any(pixel_coords >= dims) {
+        return vec3(0.0);
+    }
+    let gbuffer = textureLoad(deferred_prepass, pixel_coords, 0);
+    return unpack_base_color(gbuffer.r);
+}
+
 @compute
 @workgroup_size(8, 8, 1)
-fn ssao(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn ssgi(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let slice_count = f32(#SLICE_COUNT);
     let samples_per_slice_side = f32(#SAMPLES_PER_SLICE_SIDE);
     let effect_radius = 0.5 * 1.457;
@@ -155,6 +176,9 @@ fn ssao(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var visibility = 0.0;
     var occluded_sample_count = 0u;
+    var indirect_light = vec3<f32>(0.0);
+    var total_gi_weight = 0.0;
+
     for (var slice_t = 0.0; slice_t < slice_count; slice_t += 1.0) {
         let slice = slice_t + noise.x;
         let phi = (PI / slice_count) * slice;
@@ -183,22 +207,73 @@ fn ssao(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
             // * view.viewport.zw gets us from [0, 1] to [0, viewport_size], which is needed for this to get the correct mip levels
             let sample_mip_level = clamp(log2(length(sample * view.viewport.zw)) - 3.3, 0.0, 5.0); // https://github.com/GameTechDev/XeGTAO#memory-bandwidth-bottleneck
-            let sample_position_1 = load_and_reconstruct_view_space_position(uv + sample, sample_mip_level);
-            let sample_position_2 = load_and_reconstruct_view_space_position(uv - sample, sample_mip_level);
+
+            let sample_uv_1 = uv + sample;
+            let sample_uv_2 = uv - sample;
+            let sample_position_1 = load_and_reconstruct_view_space_position(sample_uv_1, sample_mip_level);
+            let sample_position_2 = load_and_reconstruct_view_space_position(sample_uv_2, sample_mip_level);
 
             let sample_difference_1 = sample_position_1 - pixel_position;
             let sample_difference_2 = sample_position_2 - pixel_position;
 
+            // --- AO: update bitmask (existing VBAO logic) ---
             processSample(sample_difference_1, view_vec, -1.0, n, samples_per_slice_side * 2.0, &bitmask);
             processSample(sample_difference_2, view_vec, 1.0, n, samples_per_slice_side * 2.0, &bitmask);
+
+            // --- GI: accumulate indirect light from nearby surfaces ---
+            // For each sample, read the base color from the deferred GBuffer
+            // and weight the contribution by a geometric factor.
+
+            let sample_pixel_1 = vec2<i32>(sample_uv_1 * view.viewport.zw);
+            let sample_pixel_2 = vec2<i32>(sample_uv_2 * view.viewport.zw);
+
+            let base_color_1 = sample_gbuffer_base_color(sample_pixel_1);
+            let base_color_2 = sample_gbuffer_base_color(sample_pixel_2);
+
+            // Geometric weight: cosine of angle between pixel normal and direction to sample,
+            // with distance falloff. This approximates the form factor for diffuse light transfer.
+            let dist_sq_1 = dot(sample_difference_1, sample_difference_1);
+            let dist_sq_2 = dot(sample_difference_2, sample_difference_2);
+            let dir_1 = sample_difference_1 / max(sqrt(dist_sq_1), 0.0001);
+            let dir_2 = sample_difference_2 / max(sqrt(dist_sq_2), 0.0001);
+
+            // Cosine at the receiving pixel (how much the sample is "above" the surface)
+            let cos_receiver_1 = max(dot(pixel_normal, dir_1), 0.0);
+            let cos_receiver_2 = max(dot(pixel_normal, dir_2), 0.0);
+
+            // Distance-based attenuation: 1/(1 + d^2) provides a soft falloff
+            // that avoids division by zero and naturally limits the effect radius.
+            let atten_1 = 1.0 / (1.0 + dist_sq_1 * 10.0);
+            let atten_2 = 1.0 / (1.0 + dist_sq_2 * 10.0);
+
+            // Also apply the same radius falloff as the AO to keep the GI consistent
+            let falloff_1 = saturate(sqrt(dist_sq_1) * falloff_mul + falloff_add);
+            let falloff_2 = saturate(sqrt(dist_sq_2) * falloff_mul + falloff_add);
+
+            let gi_weight_1 = cos_receiver_1 * atten_1 * falloff_1;
+            let gi_weight_2 = cos_receiver_2 * atten_2 * falloff_2;
+
+            indirect_light += base_color_1 * gi_weight_1;
+            indirect_light += base_color_2 * gi_weight_2;
+            total_gi_weight += gi_weight_1 + gi_weight_2;
         }
 
         occluded_sample_count += countOneBits(bitmask);
     }
 
+    // Compute final AO visibility
     visibility = 1.0 - f32(occluded_sample_count) / (slice_count * 2.0 * samples_per_slice_side);
-
     visibility = clamp(visibility, 0.03, 1.0);
 
-    textureStore(ambient_occlusion, pixel_coordinates, vec4<f32>(visibility, 0.0, 0.0, 0.0));
+    // Normalize indirect light
+    if total_gi_weight > 0.0 {
+        indirect_light /= total_gi_weight;
+    }
+
+    // Scale the indirect light intensity.
+    // This factor controls how strong the indirect bounce is; it can be tuned.
+    let gi_intensity = 0.5;
+    indirect_light *= gi_intensity;
+
+    textureStore(ssgi_output, pixel_coordinates, vec4<f32>(visibility, indirect_light));
 }

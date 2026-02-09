@@ -4,7 +4,7 @@ use crate::{
 };
 use crate::{
     MeshPipeline, MeshViewBindGroup, RenderViewLightProbes, ScreenSpaceAmbientOcclusion,
-    ScreenSpaceReflectionsUniform, ViewContactShadowsUniformOffset,
+    ScreenSpaceGlobalIllumination, ScreenSpaceReflectionsUniform, ViewContactShadowsUniformOffset,
     ViewEnvironmentMapUniformOffset, ViewLightProbesUniformOffset,
     ViewScreenSpaceReflectionsUniformOffset, TONEMAPPING_LUT_SAMPLER_BINDING_INDEX,
     TONEMAPPING_LUT_TEXTURE_BINDING_INDEX,
@@ -425,15 +425,16 @@ pub fn prepare_deferred_lighting_pipelines(
         Option<&ShadowFilteringMethod>,
         (
             Has<ScreenSpaceAmbientOcclusion>,
+            Has<ScreenSpaceGlobalIllumination>,
             Has<ScreenSpaceReflectionsUniform>,
-            Has<DistanceFog>,
         ),
         (
+            Has<DistanceFog>,
             Has<NormalPrepass>,
             Has<DepthPrepass>,
             Has<MotionVectorPrepass>,
-            Has<DeferredPrepass>,
         ),
+        Has<DeferredPrepass>,
         Has<RenderViewLightProbes<EnvironmentMapLight>>,
         Has<RenderViewLightProbes<IrradianceVolume>>,
         Has<SkipDeferredLighting>,
@@ -446,8 +447,9 @@ pub fn prepare_deferred_lighting_pipelines(
         tonemapping,
         dither,
         shadow_filter_method,
-        (ssao, ssr, distance_fog),
-        (normal_prepass, depth_prepass, motion_vector_prepass, deferred_prepass),
+        (ssao, ssgi, ssr),
+        (distance_fog, normal_prepass, depth_prepass, motion_vector_prepass),
+        deferred_prepass,
         has_environment_maps,
         has_irradiance_volumes,
         skip_deferred_lighting,
@@ -510,7 +512,7 @@ pub fn prepare_deferred_lighting_pipelines(
             }
         }
 
-        if ssao {
+        if ssao || ssgi {
             view_key |= MeshPipelineKey::SCREEN_SPACE_AMBIENT_OCCLUSION;
         }
         if ssr {

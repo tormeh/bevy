@@ -320,7 +320,10 @@ pub fn check_views_need_specialization(
         Option<&Tonemapping>,
         Option<&DebandDither>,
         Option<&ShadowFilteringMethod>,
-        Has<ScreenSpaceAmbientOcclusion>,
+        (
+            Has<ScreenSpaceAmbientOcclusion>,
+            Has<ScreenSpaceGlobalIllumination>,
+        ),
         (
             Has<NormalPrepass>,
             Has<DepthPrepass>,
@@ -347,7 +350,7 @@ pub fn check_views_need_specialization(
         tonemapping,
         dither,
         shadow_filter_method,
-        ssao,
+        (ssao, ssgi),
         (normal_prepass, depth_prepass, motion_vector_prepass, deferred_prepass),
         transmission,
         temporal_jitter,
@@ -435,7 +438,7 @@ pub fn check_views_need_specialization(
                 view_key |= MeshPipelineKey::DEBAND_DITHER;
             }
         }
-        if ssao {
+        if ssao || ssgi {
             view_key |= MeshPipelineKey::SCREEN_SPACE_AMBIENT_OCCLUSION;
         }
         if distance_fog {

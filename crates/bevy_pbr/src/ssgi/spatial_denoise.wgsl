@@ -1,26 +1,28 @@
-// 3x3 bilaterial filter (edge-preserving blur)
+// 3x3 bilateral filter (edge-preserving blur) for SSGI
 // https://people.csail.mit.edu/sparis/bf_course/course_notes.pdf
-
+//
+// Denoises both the ambient occlusion (R channel) and indirect light (GBA channels)
+// simultaneously using the same edge-preserving weights derived from depth differences.
+//
 // Note: Does not use the Gaussian kernel part of a typical bilateral blur
 // From the paper: "use the information gathered on a neighborhood of 4 × 4 using a bilateral filter for
 // reconstruction, using _uniform_ convolution weights"
 
-// Note: The paper does a 4x4 (not quite centered) filter, offset by +/- 1 pixel every other frame
-// XeGTAO does a 3x3 filter, on two pixels at a time per compute thread, applied twice
-// We do a 3x3 filter, on 1 pixel per compute thread, applied once
-
 #import bevy_render::view::View
 
-@group(0) @binding(0) var ambient_occlusion_noisy: texture_2d<f32>;
+@group(0) @binding(0) var ssgi_noisy: texture_2d<f32>;
 @group(0) @binding(1) var depth_differences: texture_2d<u32>;
-#ifdef USE_R16FLOAT
-@group(0) @binding(2) var ambient_occlusion: texture_storage_2d<r16float, write>;
-#else
-@group(0) @binding(2) var ambient_occlusion: texture_storage_2d<r32float, write>;
-#endif
+@group(0) @binding(2) var ssgi_denoised: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(0) var point_clamp_sampler: sampler;
 @group(1) @binding(1) var linear_clamp_sampler: sampler;
 @group(1) @binding(2) var<uniform> view: View;
+
+// Safely load from the noisy SSGI texture, clamping to valid coordinates.
+fn load_ssgi(coords: vec2<i32>) -> vec4<f32> {
+    let dims = vec2<i32>(textureDimensions(ssgi_noisy));
+    let clamped = clamp(coords, vec2<i32>(0), dims - vec2<i32>(1));
+    return textureLoad(ssgi_noisy, clamped, 0);
+}
 
 @compute
 @workgroup_size(8, 8, 1)
@@ -28,13 +30,10 @@ fn spatial_denoise(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pixel_coordinates = vec2<i32>(global_id.xy);
     let uv = vec2<f32>(pixel_coordinates) / view.viewport.zw;
 
+    // Load edge weights from depth differences using textureGather (single-channel texture)
     let edges0 = textureGather(0, depth_differences, point_clamp_sampler, uv);
     let edges1 = textureGather(0, depth_differences, point_clamp_sampler, uv, vec2<i32>(2i, 0i));
     let edges2 = textureGather(0, depth_differences, point_clamp_sampler, uv, vec2<i32>(1i, 2i));
-    let visibility0 = textureGather(0, ambient_occlusion_noisy, point_clamp_sampler, uv);
-    let visibility1 = textureGather(0, ambient_occlusion_noisy, point_clamp_sampler, uv, vec2<i32>(2i, 0i));
-    let visibility2 = textureGather(0, ambient_occlusion_noisy, point_clamp_sampler, uv, vec2<i32>(0i, 2i));
-    let visibility3 = textureGather(0, ambient_occlusion_noisy, point_clamp_sampler, uv, vec2<i32>(2i, 2i));
 
     let left_edges = unpack4x8unorm(edges0.x);
     let right_edges = unpack4x8unorm(edges1.x);
@@ -53,25 +52,27 @@ fn spatial_denoise(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let bottom_left_weight = 0.425 * (bottom_weight * bottom_edges.x + left_weight * left_edges.w);
     let bottom_right_weight = 0.425 * (bottom_weight * bottom_edges.y + right_weight * right_edges.w);
 
-    let center_visibility = visibility0.y;
-    let left_visibility = visibility0.x;
-    let right_visibility = visibility0.z;
-    let top_visibility = visibility1.x;
-    let bottom_visibility = visibility2.z;
-    let top_left_visibility = visibility0.w;
-    let top_right_visibility = visibility1.w;
-    let bottom_left_visibility = visibility2.w;
-    let bottom_right_visibility = visibility3.w;
+    // Load all 9 neighbors using textureLoad (reads all RGBA channels at once)
+    let center = load_ssgi(pixel_coordinates);
+    let left = load_ssgi(pixel_coordinates + vec2<i32>(-1, 0));
+    let right = load_ssgi(pixel_coordinates + vec2<i32>(1, 0));
+    let top = load_ssgi(pixel_coordinates + vec2<i32>(0, -1));
+    let bottom = load_ssgi(pixel_coordinates + vec2<i32>(0, 1));
+    let top_left = load_ssgi(pixel_coordinates + vec2<i32>(-1, -1));
+    let top_right = load_ssgi(pixel_coordinates + vec2<i32>(1, -1));
+    let bottom_left = load_ssgi(pixel_coordinates + vec2<i32>(-1, 1));
+    let bottom_right = load_ssgi(pixel_coordinates + vec2<i32>(1, 1));
 
-    var sum = center_visibility;
-    sum += left_visibility * left_weight;
-    sum += right_visibility * right_weight;
-    sum += top_visibility * top_weight;
-    sum += bottom_visibility * bottom_weight;
-    sum += top_left_visibility * top_left_weight;
-    sum += top_right_visibility * top_right_weight;
-    sum += bottom_left_visibility * bottom_left_weight;
-    sum += bottom_right_visibility * bottom_right_weight;
+    // Weighted sum of all channels (AO in R, indirect light in GBA)
+    var sum = center * center_weight;
+    sum += left * left_weight;
+    sum += right * right_weight;
+    sum += top * top_weight;
+    sum += bottom * bottom_weight;
+    sum += top_left * top_left_weight;
+    sum += top_right * top_right_weight;
+    sum += bottom_left * bottom_left_weight;
+    sum += bottom_right * bottom_right_weight;
 
     var sum_weight = center_weight;
     sum_weight += left_weight;
@@ -83,7 +84,7 @@ fn spatial_denoise(@builtin(global_invocation_id) global_id: vec3<u32>) {
     sum_weight += bottom_left_weight;
     sum_weight += bottom_right_weight;
 
-    let denoised_visibility = sum / sum_weight;
+    let denoised = sum / sum_weight;
 
-    textureStore(ambient_occlusion, pixel_coordinates, vec4<f32>(denoised_visibility, 0.0, 0.0, 0.0));
+    textureStore(ssgi_denoised, pixel_coordinates, denoised);
 }
