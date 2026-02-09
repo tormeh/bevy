@@ -53,6 +53,7 @@ mod pbr_material;
 mod prepass;
 mod render;
 mod ssao;
+mod ssgi;
 mod ssr;
 mod transmission;
 mod volumetric_fog;
